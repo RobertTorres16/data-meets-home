@@ -1,0 +1,257 @@
+---
+title: "Proyecto II"
+author: "Robert"
+date: "2025-03-27"
+output: word_document
+---
+# Objetivo IPV 
+```{r setup, include = FALSE, echo = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+Las primeras predicciones del modelo, entrenado con datos de 2018, no han reflejado correctamente los precios actuales de la vivienda en Valencia. Por ello, se va a realizar un pequeño análisis exploratorio del Índice de Precios de la Vivienda (IPV), con el objetivo de observar cómo han evolucionado los precios desde 2018 hasta 2025. Este análisis permitirá ajustar las predicciones del modelo a la situación actual del mercado, mejorando así su precisión.
+
+#### Carga de las librerías
+
+```{r carga de librerías}
+library(readxl)
+library(ggplot2)
+library(dplyr) 
+library(caret)
+library(readr)
+library(lightgbm)
+```
+#### Carga de los datos y el modelo
+
+```{r carga de datos}
+datos_ipv = suppressMessages(suppressWarnings(read_excel("../data/IPV_ComunidadValenciana.xlsx")))
+datos_2025 <- readRDS("../models/datos_limpios.rds")
+modelo_lm = readRDS("../models/modelo_lm.rds")
+modelo_rf = readRDS("../models/modelo_rf.rds")
+modelo_xgb = readRDS("../models/modelo_xgb.rds")
+modelo_lgb = readRDS("../models/modelo_lgb.rds")
+```
+
+```{r}
+datos_2025 <- datos_2025 %>% filter(district != "Alboraya Centro")
+datos_2025 <- datos_2025 %>% filter(district != "La Patacona")
+# Selecciona y renombra las variables requeridas
+datos_predecir <- datos_2025 %>%
+    transmute(
+        FLOORCLEAN = floor,
+        PRICE = price,
+        CONSTRUCTEDAREA = as.numeric(size),
+        ROOMNUMBER = rooms,
+        BATHNUMBER = bathrooms,
+        DISTRITO = district,
+        DISTANCE_TO_CITY_CENTER = distance,
+        status = status,
+        HASLIFT = as.factor(hasLift),
+        UNITPRICE = priceByArea,
+        DISTANCE_TO_METRO = distancia_min_estacion_m,
+    )
+datos_predecir$status <- ifelse(datos_predecir$status == "newdevelopment", "Nueva", ifelse(datos_predecir$status == "renew", "Restaurar", "BuenEstado"))
+datos_predecir$status <- as.factor(datos_predecir$status)
+datos_predecir$HASLIFT = as.factor(datos_predecir$HASLIFT)
+# Crear el transformador de variables dummy INCLUYENDO todas las variables
+dummies <- dummyVars(PRICE ~ ., data = datos_predecir)
+# Aplica el transformador a los datos
+datos_dummies <- predict(dummies, newdata = datos_predecir)
+# Elimina las columnas hasLift.1 y hasLift.0 si existen
+cols_to_remove <- grep("^HASLIFT\\.", colnames(datos_dummies), value = TRUE)
+datos_predecir2 <- datos_dummies[, !(colnames(datos_dummies) %in% cols_to_remove)]
+datos_predecir2 <- as.data.frame(datos_predecir2) # Convertir a data.frame para evitar el warning
+# Añade la columna PRICE desde datos_predecir original
+datos_predecir2$PRICE <- datos_predecir$PRICE
+datos_predecir2$HASLIFT <- as.numeric(as.character(datos_predecir$HASLIFT))
+# Renombrar columnas de distritos para que tengan puntos en vez de espacios y apóstrofes
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOCamins al Grau"] <- "DISTRITOCamins.al.Grau"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOCiutat Vella"] <- "DISTRITOCiutat.Vella"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOEl Pla del Real"] <- "DISTRITOEl.Pla.del.Real"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOL'Eixample"] <- "DISTRITOL.Eixample"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOL'Olivereta"] <- "DISTRITOL.Olivereta"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOLa Saïdia"] <- "DISTRITOLa.Saïdia"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOPoblats Marítims"] <- "DISTRITOPoblats.Marítims"
+colnames(datos_predecir2)[colnames(datos_predecir2) == "DISTRITOQuatre Carreres"] <- "DISTRITOQuatre.Carreres"
+```
+
+Las primeras predicciones del modelo, entrenado con datos de 2018, no han reflejado correctamente los precios actuales de la vivienda en Valencia. Por ello, se va a realizar un pequeño análisis exploratorio del Índice de Precios de la Vivienda (IPV), con el objetivo de observar cómo han evolucionado los precios desde 2018 hasta 2025. Este análisis permitirá ajustar las predicciones del modelo a la situación actual del mercado, mejorando así su precisión.
+
+Primero observaremos la evolución año a año desde 2007 hasta 2024 para tener una visión global de la situación del mercado inmobiliario.
+
+```{r evolución anual 2007-2024}
+IPV = as.numeric(datos_ipv[13, 2:73])
+variacion_pct = as.numeric(datos_ipv[13, 74:135])
+trimestre = as.character(datos_ipv[7, 2:73])
+
+# Extraer el año de cada trimestre
+anio = substr(trimestre, 1, 4)
+
+# Calcular el promedio anual del IPV
+df_anual = aggregate(IPV ~ anio, FUN = mean)
+
+library(ggplot2)
+ggplot(df_anual, aes(x = anio, y = IPV, group = 1)) +
+    geom_line(color = "blue") +
+    geom_point() +
+    labs(title = "Evolución anual del Índice de Precios de la Vivienda (IPV) en la Comunidad Valenciana",
+         x = "Año",
+         y = "IPV promedio anual") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+El gráfico muestra claramente la evolución del Índice de Precios de la Vivienda (IPV) en la Comunidad Valenciana desde 2007 hasta 2024, reflejando las principales tendencias del mercado inmobiliario en este periodo. Se observa una fuerte caída en los precios desde 2008 hasta 2013, consecuencia directa de la crisis financiera y el estallido de la burbuja inmobiliaria, lo que llevó a una importante corrección en el valor de la vivienda. A partir de 2013, el mercado entra en una fase de estabilización, con precios que se mantienen bajos durante algunos años, señalando un periodo de ajuste y menor actividad. Sin embargo, desde 2016 se inicia una recuperación progresiva y sostenida, con incrementos anuales cada vez más pronunciados, especialmente a partir de 2020, cuando el crecimiento se acelera notablemente. Este repunte puede estar relacionado con la recuperación económica tras la pandemia, el aumento de la demanda y la escasez de oferta en el mercado, factores que han impulsado los precios hasta alcanzar en 2024 niveles superiores a los registrados antes de la crisis. En conjunto, el análisis evidencia cómo el mercado de la vivienda en la Comunidad Valenciana ha superado la etapa de ajuste post-crisis y se encuentra actualmente en una fase de expansión, con precios en máximos históricos.
+
+Ahora miraremos la evolución entre 2018(datos con los que se ha entrenado el modelo) y 2024 más detalladamente, por trimestre y mirando las variaciones porcentuales.
+
+```{r evolución trimestral 2018-2024}
+# Filtrar los datos desde 2018 hasta 2024
+indices_2018_2024 = which(anio >= "2018" & anio <= "2024")
+IPV_2018_2024 = IPV[indices_2018_2024]
+variacion_pct_2018_2024 = variacion_pct[indices_2018_2024]
+trimestre_2018_2024 = trimestre[indices_2018_2024]
+
+# Calcular variaciones porcentuales trimestrales
+
+
+df_trimestral = data.frame(
+    Trimestre = trimestre_2018_2024,
+    IPV = IPV_2018_2024,
+    Variacion = variacion_pct_2018_2024
+)
+
+library(ggplot2)
+ggplot(df_trimestral, aes(x = Trimestre, y = IPV, group = 1)) +
+    geom_line(color = "darkgreen") +
+    geom_point() +
+    labs(title = "Evolución trimestral del IPV (2018-2024)",
+             x = "Trimestre",
+             y = "IPV") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(df_trimestral, aes(x = Trimestre, y = Variacion, group = 1)) +
+    geom_bar(stat = "identity", fill = "orange") +
+    labs(title = "Variación porcentual trimestral del IPV (2018-2024)",
+             x = "Trimestre",
+             y = "Variación (%)") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+predicciones <- predict(modelo_lm, newdata = datos_predecir2)
+rmse <- RMSE(predicciones, datos_predecir2$PRICE)
+mae  <- MAE(predicciones, datos_predecir2$PRICE)
+r2   <- R2(predicciones, datos_predecir2$PRICE)
+cat("RMSE:", rmse, "\nMAE:", mae, "\nR2:", r2, "\n")
+```
+```{r}
+pred_rf <- predict(modelo_rf, newdata = datos_predecir2)
+pred_rf <- pred_rf * 1.5
+rmse_rf <- RMSE(pred_rf, datos_predecir2$PRICE)
+mae_rf  <- MAE(pred_rf, datos_predecir2$PRICE)
+r2_rf   <- R2(pred_rf, datos_predecir2$PRICE)
+cat("Random Forest - RMSE:", rmse_rf, "\nMAE:", mae_rf, "\nR2:")
+```
+
+```{r}
+df_pred <- data.frame(
+  PrecioReal = testData$PRICE,
+  PrecioPredicho = pred_rf
+)
+
+ggplot(df_pred, aes(x = PrecioReal, y = PrecioPredicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho",
+    subtitle = "Random Forest",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+pred_xgb <- predict(modelo_xgb, newdata = datos_predecir2)
+rmse_xgb <- RMSE(pred_xgb, datos_predecir2$PRICE[1:2865])
+mae_xgb  <- MAE(pred_xgb, datos_predecir2$PRICE[1:2865])
+r2_xgb   <- R2(pred_xgb, datos_predecir2$PRICE[1:2865])
+cat("XGBoost - RMSE:", rmse_xgb, "\nMAE:", mae_xgb, "\nR2:", r2_xgb, "\n")
+```
+
+```{r}
+pred_rf <- predict(modelo_rf, newdata = datos_predecir2)
+rmse_rf <- RMSE(pred_rf, datos_predecir2$PRICE[1:2865])
+mae_rf  <- MAE(pred_rf, datos_predecir2$PRICE[1:2865])
+r2_rf   <- R2(pred_rf, datos_predecir2$PRICE[1:2865])
+cat("XGBoost - RMSE:", rmse_rf, "\nMAE:", mae_rf, "\nR2:", r2_rf, "\n")
+```
+
+```{r}
+datos_predecir2_mat <- as.matrix(subset(datos_predecir2, select = -c(PRICE, UNITPRICE)))
+pred_lgb <- predict(modelo_lgb, datos_predecir2_mat)
+# Métricas de evaluación
+rmse_lgb <- sqrt(mean((datos_predecir2$PRICE - pred_lgb)^2))
+mae_lgb <- mean(abs(datos_predecir2$PRICE - pred_lgb))
+r2_lgb <- 1 - sum((datos_predecir2$PRICE - pred_lgb)^2) / sum((datos_predecir2$PRICE - mean(datos_predecir2$PRICE))^2)
+
+cat("LightGBM - RMSE:", rmse_lgb, "\nMAE:", mae_lgb, "\nR2:", r2_lgb, "\n")
+```
+
+```{r}
+df_disp <- data.frame(
+  Precio_Real = datos_predecir2$PRICE,
+  Precio_Predicho = pred_lgb
+)
+
+ggplot(df_disp, aes(x = Precio_Real, y = Precio_Predicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed", size = 1.2) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho\nLightGBM",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+
+# Obtener importancia de variables del modelo LightGBM
+importancia <- lgb.importance(modelo_lgb)
+importancia$Feature <- factor(importancia$Feature, levels = importancia$Feature[order(importancia$Gain, decreasing = TRUE)])
+```
+
+```{r}
+pred_lgb_ipv <- pred_lgb * 1.5
+# Métricas de evaluación
+rmse_lgb_ipv <- sqrt(mean((datos_predecir2$PRICE - pred_lgb_ipv)^2))
+mae_lgb_ipv <- mean(abs(datos_predecir2$PRICE - pred_lgb_ipv))
+r2_lgb_ipv <- 1 - sum((datos_predecir2$PRICE - pred_lgb_ipv)^2) / sum((datos_predecir2$PRICE - mean(datos_predecir2$PRICE))^2)
+
+cat("LightGBM - RMSE:", rmse_lgb_ipv, "\nMAE:", mae_lgb_ipv, "\nR2:", r2_lgb_ipv, "\n")
+```
+
+```{r}
+df_disp2 <- data.frame(
+  Precio_Real = datos_predecir2$PRICE,
+  Precio_Predicho = pred_lgb_ipv
+)
+
+ggplot(df_disp2, aes(x = Precio_Real, y = Precio_Predicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed", size = 1.2) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho\nLightGBM",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+```

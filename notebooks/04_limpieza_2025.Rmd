@@ -1,0 +1,346 @@
+---
+title: "Proyecto II"
+author: "Robert"
+date: "2025-03-27"
+output: word_document
+---
+### Setup
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+### Carga de librerías
+```{r }
+library(dplyr)
+library(readxl)
+library(leaflet)
+library(shiny)
+library(dplyr)
+library(readxl)
+library(jsonlite)
+library(stringr)
+library(knitr)
+```
+
+### Carga de los datos
+```{r }
+datos = read_excel("../data/propiedades_valencia_2025.xlsx")
+head(datos)
+```
+### Limpieza y exploración
+
+## Eliminar duplicados
+
+Sabemos que hay duplicados porque al realizar el scraping de los datos de propiedades, se utilizó la API dos veces, dividiendo la búsqueda en dos áreas geográficas: una al norte de Valencia y otra al sur. Esto significa que algunas propiedades que se encuentran en la zona de intersección entre ambas áreas pueden haber sido capturadas en ambas consultas, generando duplicados en el conjunto de datos.
+
+```{r}
+nrow(datos)
+duplicados <- datos %>% group_by(propertyCode) %>% filter(n() > 1) %>% ungroup()
+nrow(duplicados)
+duplicados_buenos = duplicados %>% group_by(propertyCode) %>%  slice_head(n = 1) %>% ungroup() # de los duplicados, nos quedamos los de menor precio
+nrow(duplicados_buenos)
+datos <- anti_join(datos, duplicados_buenos, by = c("propertyCode", "price")) # eliminamos los duplicados de la base de datos
+datos <- rbind(datos, duplicados_buenos)
+nrow(datos)
+```
+## Arreglo de las variables en formato JSON
+
+Algunas columnas del dataset contenían información en formato JSON, lo que significa que dentro de una sola celda había un conjunto de otras variables estructuradas como clave-valor.
+Por ejemplo, la columna `priceInfo` contenía información sobre el precio, moneda, y posibles descuentos en formato JSON.
+Para trabajar con estos datos, fue necesario limpiar el formato JSON (reemplazar comillas simples por dobles) y luego procesar el contenido para extraer las variables relevantes.
+
+```{r}
+head(datos$priceInfo)
+datos <- datos %>% 
+    mutate(
+        priceInfo_clean = str_replace_all(priceInfo, "'", "\""), parsed_json = lapply(priceInfo_clean, function(x) tryCatch(fromJSON(x), error = function(e) NULL))) %>%
+        rowwise() %>% 
+        mutate(
+            amount = parsed_json$price$amount %||% NA,
+            currency = parsed_json$price$currencySuffix %||% NA, 
+            former_price = parsed_json$price$priceDropInfo$formerPrice %||% NA, 
+            price_drop_value = parsed_json$price$priceDropInfo$priceDropValue %||% NA, 
+            price_drop_percentage = parsed_json$price$priceDropInfo$priceDropPercentage %||% NA) %>% 
+            select(-parsed_json, -priceInfo_clean, -priceInfo)
+
+head(datos$detailedType)
+datos <- datos %>% 
+  mutate(
+    detailedType_clean = str_replace_all(detailedType, "'", "\""), 
+    parsed_json = lapply(detailedType_clean, function(x) tryCatch(fromJSON(x), error = function(e) NULL))
+  ) %>%
+  rowwise() %>% 
+  mutate(
+    typology = parsed_json$typology %||% NA,
+    subTypology = parsed_json$subTypology %||% NA
+  ) %>% 
+  select(-parsed_json, -detailedType_clean, -detailedType)
+
+head(table(datos$suggestedTexts)) #Como es de tipo texto no la procesamos ya que no nos va a servir en el análisis exploratorio
+
+table(datos$highlight, useNA = "ifany") #Se puede ver que realmente es simplemente una variable categórica así que la procesamos para poder analizarla posteriormente
+datos <- datos %>%
+    mutate(highlight = case_when(
+        highlight == "{'groupDescription': 'Destacado'}" ~ "Destacado",
+        highlight == "{'groupDescription': 'Top'}" ~ "Top",
+        highlight == "{'groupDescription': 'Top+'}" ~ "Top+",
+        highlight == "TRUE" ~ "True",
+        highlight == "FALSE" ~ "False",
+        TRUE ~ NA_character_
+    ))
+table(datos$highlight, useNA = "ifany")
+extract_parking_info <- function(parking_info) {
+  if (is.na(parking_info)) {
+    return(data.frame(hasParkingSpace = NA, isParkingSpaceIncludedInPrice = NA, parkingSpacePrice = NA))
+  } else {
+    parking_info <- gsub("'", "\"", parking_info)  
+    parking_info <- gsub("\\bTrue\\b", "true", parking_info)  
+    parking_info <- gsub("\\bFalse\\b", "false", parking_info)  
+    tryCatch({
+      parking_info <- fromJSON(parking_info)
+      hasParkingSpace <- parking_info$hasParkingSpace
+      isParkingSpaceIncludedInPrice <- parking_info$isParkingSpaceIncludedInPrice
+      parkingSpacePrice <- ifelse(isParkingSpaceIncludedInPrice, NA, parking_info$parkingSpacePrice)
+      return(data.frame(hasParkingSpace, isParkingSpaceIncludedInPrice, parkingSpacePrice))
+    }, error = function(e) {
+      return(data.frame(hasParkingSpace = NA, isParkingSpaceIncludedInPrice = NA, parkingSpacePrice = NA))
+    })
+  }
+}
+
+parking_info <- do.call(rbind, lapply(datos$parkingSpace, extract_parking_info))
+datos <- cbind(datos, parking_info)
+datos <- datos %>% select(-parkingSpace)
+names(datos)
+```
+
+Creamos una tabla con las variables en filas que incluya una columna con el tipo de variable. Esta tabla auxiliar la podremos utilizar después para seleccionar variables de un determinado tipo y explorarlas o analizarlas, por lo que es muy recomendable cuando tenemos muchas variables y, además, son de distinta naturaleza por lo que requieren distinto tratamiento.
+
+```{r }
+descProp = data.frame("variable" = colnames(datos),
+                      "tipo" = c("id", "url", "text", rep("numerical", 3), rep("categorical", 2), "numerical", "binary", rep("numerical", 2), "text", rep("categorical", 5), rep("numerical", 2), "binary", "url", "numerical", "text", "binary", "categorical", rep("binary", 2), rep("numerical", 2), "text", rep("binary", 4), rep("categorical", 3), rep("binary", 2), "binary", rep("numerical", 2), "categorical", rep("numerical", 3), rep("categorical", 2), rep("binary", 2), "numerical"), stringsAsFactors = FALSE)
+rownames(descProp) = descProp$variable
+descProp
+```
+## Variables que no se pueden incluir en el análisis
+
+Eliminamos ciertas columnas que no se pueden utilizar ya que son de tipo texto y luego ajustamos descProp para que contenga información solo sobre las columnas que aún están en datos. Finalmente, mostramos cuántos atributos de cada tipo hay en la base de datos filtrada. Hemos dejado la variable propertyCode para poder tener un identificador y poder buscar posteriormente los pisos en internet para comprobar si los valores anómalos son errores o no
+
+```{r }
+datos = datos[,setdiff(colnames(datos), c("thumbnail", "externalReference", "address", "url", "description", "suggestedTexts"))]
+descProp = descProp[colnames(datos),]
+table(descProp$tipo)
+```
+## Variables constantes
+
+Verificaremos si alguna variable permanece constante o varía mínimamente y, en ese caso, la eliminaremos de la base de datos, ya que no sería una variable aleatoria y no tendría sentido incluirla en el análisis estadístico. Para las variables numéricas, calcularemos su desviación típica y su coeficiente de variación, este es más recomendable ya que este no depende de las unidades de medida ni de la magnitud de la variable.
+En el caso de las variables categóricas y de las binarias, generaremos una tabla de frecuencias para comprobar si presentan distintos valores.
+
+# Distribución de las variables numéricas
+
+```{r }
+summary(datos[,descProp$variable[descProp$tipo == "numerical"]])
+```
+
+Arreglo de la varialbe floor
+```{r} 
+table(datos$floor)
+datos <- datos %>% filter(is.na(floor) | floor != "st")
+datos[!is.na(datos$floor) & datos$floor == "ss", "floor"] <- "-0.5"
+datos[!is.na(datos$floor) & datos$floor == "bj", "floor"] <- "0"
+datos[!is.na(datos$floor) & datos$floor == "en", "floor"] <- "0.5"
+datos[!is.na(datos$floor) & datos$floor == "-2", "floor"] <- "2"
+datos$floor <- as.numeric(datos$floor)
+summary(datos$floor)
+```
+Arreglo de la variable change
+```{r}
+datos[datos$change == "{}", "change"] <- NA
+datos$change <- as.numeric(datos$change)
+summary(datos$change)
+```
+
+Calculamos los coeficientes de variación de las variables numéricas. Si hay variables con CV muy altos, pueden tener valores extremadamente dispersos y necesitar transformación o normalización.
+Si hay variables con CV cercanos a 0, pueden ser muy constantes y poco informativas.
+```{r }
+mySD = apply(datos[,descProp$variable[descProp$tipo == "numerical"]], 2, sd, na.rm = TRUE)
+myMU = colMeans(datos[,descProp$variable[descProp$tipo == "numerical"]], na.rm = TRUE)
+myCV = mySD/myMU
+sort(myCV)
+```
+Los coeficientes de variación (CV) indican la dispersión relativa de las variables numéricas, valores cercanos a 0 (como longitude y latitude) muestran baja variabilidad, lo que es normal para coordenadas geográficas. Por otra parte, valores más altos (como price_drop_value) reflejan mayor dispersión, lo que puede ser esperado en variables relacionadas con precios y descuentos.
+
+# Ditribución de las variables binarias
+
+```{r }
+apply(datos[,descProp$variable[descProp$tipo == "binary"]], 2, table, useNA = "i")
+apply(datos[,descProp$variable[descProp$tipo == "binary"]], 2,
+      function (x) round(100*table(x)/sum(table(x)), 2))
+```
+# Distribución de las variables categóricas
+
+```{r }
+apply(datos[,descProp$variable[descProp$tipo == "categorical"]], 2, table, useNA = "i")
+apply(datos[,descProp$variable[descProp$tipo == "categorical"]], 2,
+      function (x) round(100*table(x)/sum(table(x)), 2))
+```
+
+Después de analizar cada variable vemos cuales hay que eliminar:
+
+- operation -> Todos los valores son sale
+- province -> Todos los valores valencia
+- municipality -> Todos los valores valencia
+- country -> Todos los valores es
+- hasVideo -> Casi ninguna tiene y es irrelevante para nuestro estudio
+- highlight -> Muchos valores NA
+- savedAd -> Muchos valores NA
+- notes -> Muchos valores NA
+- change -> Casi todos los valores son NA
+- has3DTour -> Irrelevante para el estudio y casi constante
+- has360 -> Irrelevante para el estudio y casi constante
+- hasStaging -> Irrelevante para el estudio y casi constante
+- topNewDevelopment -> Casi constante
+- topPlus -> Casi constante
+- newDevelopmentFinished -> Muchos valores NA
+- amount -> Misma variable que price
+- currency -> Todas €
+- hasParkingSpace -> Muchos valores NA
+- isParkingSpaceIncludedInPrice -> Muchos valores NA
+- parkingSpacePrice -> Muchos valores NA
+
+```{r}
+datos = datos[,setdiff(colnames(datos), c("operation", "province", "municipality", "country", "hasVideo", "highlight", "savedAd", "notes", "change", "has3DTour", "has360", "hasStaging", "topNewDevelopment", "topPlus", "newDevelopmentFinished", "amount", "currency", "hasParkingSpace", "isParkingSpaceIncludedInPrice", "parkingSpacePrice"))]
+descProp = descProp[colnames(datos),]
+```
+
+## Valores incosistentes o anómalos
+
+En este apartado se analizará la presencia de valores inconsistentes, es decir, aquellos que no son posibles dentro del rango de definición de la variable y que, por tanto, se deben a un error, en cuyo caso serán sustituidos por NA y considerados datos faltantes. Tanto las variables numéricas como las categóricas pueden presentar valores inconsistentes, por lo que se evaluarán de manera específica. Además, se estudiarán los valores anómalos en las variables numéricas, diferenciando entre aquellos que son errores y deben ser tratados como valores inconsistentes y aquellos que, aunque extremos, son posibles y requieren una decisión sobre su inclusión o eliminación en el análisis. Para ello, se adoptará un enfoque univariante, examinando cada variable por separado.
+
+El análisis preliminar de las variables categóricas mediante tablas de frecuencias no mostró valores inconsistentes, por lo que se procederá a estudiar gráficamente las variables numéricas mediante diagramas de cajas y bigotes en escala logarítmica para mitigar las diferencias de rango y facilitar la visualización, analizando luego de forma individual aquellas variables que resulten más llamativas.
+
+Boxplot de la variable rooms(número de habitaciones)
+
+```{r}
+library(ggplot2)
+ggplot(datos, aes(x = as.factor(1), y = rooms)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot del Número de Habitaciones",
+       x = "",
+       y = "Número de Habitaciones") +
+  theme_minimal()
+```
+Se identifican seis valores anómalos, correspondientes a pisos con un número de habitaciones significativamente superior al del resto. Vamos a ver a qué pisos corresponden
+```{r}
+muchas_habitaciones <- datos %>% 
+  filter(rooms >= 7) %>% 
+  arrange(desc(rooms)) %>% 
+  slice_head(n = 6)
+View(muchas_habitaciones)
+datos <- datos %>% filter(rooms < 15)
+```
+
+Después de revisar los pisos, se decidió eliminar los tres con más habitaciones ya que se trataban de muchos apartamentos juntos en el mismo anuncio, los otros tres no los eliminamos ya que corresponden a chalets de gran tamaño con muchas habitaciones y no a errores.
+
+Boxplot de la variable bathrooms(número de baños)
+
+```{r} 
+ggplot(datos, aes(x = as.factor(1), y = bathrooms)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot del Número de Baños",
+       x = "",
+       y = "Número de Baños") +
+  theme_minimal()
+```
+Otra vez se identifican seis valores anómalos, correspondientes a pisos con un número de baños significativamente superior al del resto.
+
+```{r}
+muchos_bathrooms <- datos %>% 
+  filter(bathrooms > 5) %>% 
+  arrange(desc(bathrooms)) %>% 
+  slice_head(n = 6)
+View(muchos_bathrooms)
+datos <- datos %>% filter(bathrooms < 9)
+```
+```{r} 
+ggplot(datos, aes(x = as.factor(1), y = size)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot de size",
+       x = "",
+       y = "Size") +
+  theme_minimal()
+```
+
+```{r }
+grandes <- datos %>% 
+  filter(size > 500) %>% 
+  arrange(desc(size)) %>% 
+  slice_head(n = 5)
+grandes_property_code_1 <- grandes$propertyCode[1]
+grandes_property_code_2 <- grandes$propertyCode[2]
+datos <- datos %>% filter(propertyCode != grandes_property_code_1)
+datos <- datos %>% filter(propertyCode != grandes_property_code_2)
+```
+
+Boxplot distancia_min_metro
+
+```{r}
+ggplot(datos, aes(x = as.factor(1), y = distancia_min_estacion_m)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot del Número de Habitaciones",
+       x = "",
+       y = "Número de Habitaciones") +
+  theme_minimal()
+```
+```{r}
+lejos <- datos %>% 
+  filter(distancia_min_estacion_m > 1000) %>% 
+  arrange(desc(size)) %>% 
+  slice_head(n = 5)
+```
+```{r }
+ui <- fluidPage(
+  titlePanel("Mapa Interactivo de Propiedades en Valencia"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("priceRange", "Rango de Precio:",
+                  min = min(datos$price, na.rm = TRUE),
+                  max = max(datos$price, na.rm = TRUE),
+                  value = c(min(datos$price, na.rm = TRUE), max(datos$price, na.rm = TRUE)))
+    ),
+    mainPanel(
+      leafletOutput("map")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  filteredData <- reactive({
+    datos %>%
+      filter(price >= input$priceRange[1] & price <= input$priceRange[2]) %>%
+      filter(!is.na(longitude) & !is.na(latitude) & !is.na(price) & !is.na(url))
+  })
+
+  output$map <- renderLeaflet({
+    leaflet(filteredData()) %>%
+      addTiles() %>%
+      addCircleMarkers(
+        ~longitude, ~latitude, 
+        popup = ~paste(
+          "Precio:", price, "<br>",
+          "Ubicación:", ifelse(!is.na(neighborhood), neighborhood, district), "<br>",
+          "URL:", sprintf('<a href="%s" target="_blank">Ver Propiedad</a>', as.character(url))
+        ),
+        clusterOptions = markerClusterOptions()  # Agrupar puntos cercanos
+      )
+  })
+}
+
+shinyApp(ui, server)
+```

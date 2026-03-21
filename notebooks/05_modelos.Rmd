@@ -1,0 +1,957 @@
+---
+title: "Proyecto II"
+author: "Mihai"
+date: "2025-03-12"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cargar, include=FALSE}
+library(tinytex)
+library(sf)
+library(dplyr)
+library(readxl)
+library(rmarkdown)
+library(ggplot2)
+library(readr)
+library(geojsonsf)
+library(ggcorrplot)
+library(broom)
+library(MASS)
+library(tidyr)
+library(knitr)
+library(cluster)
+library(FactoMineR)
+library(factoextra)
+library(NbClust)
+library(clValid)
+library(caret)
+```
+
+
+# CARGA DE LA BASE DE DATOS Y ELIMINACIÓN DE DUPLICADOS
+
+Primero, empezaremos cargando la base de datos de *idealista 2018* y eliminando los valores duplicados que aparecen en esta, quedándonos con la vivienda de menor precio en el caso de que tengan el **ASSETID** repetido.
+
+
+```{r idealista, echo=TRUE}
+# Cargamos los datos
+
+load('../data/Valencia_Sale.rda')
+Valencia_Sale <- as.data.frame(st_drop_geometry(Valencia_Sale)) # creamos el dataframe
+
+
+# Eliminamos los duplicados
+
+duplicados <- Valencia_Sale %>% group_by(ASSETID) %>% filter(n() > 1) %>% ungroup() # guardamos los duplicados
+duplicados_buenos = duplicados %>% group_by(ASSETID) %>% filter(PRICE == min(PRICE)) %>% slice_head(n = 1) %>% ungroup() # de los duplicados, nos quedamos los de menor precio
+Valencia_Sale <- anti_join(Valencia_Sale, duplicados, by = c("ASSETID", "PRICE")) # eliminamos los duplicados de la base de datos
+Valencia_Sale <- rbind(Valencia_Sale, duplicados_buenos) # añadimos los duplicados buenos que nos queremos quedar
+
+
+# Guradamos esto para la limpieza
+summary_df <- as.data.frame(summary(Valencia_Sale)) 
+
+summary(Valencia_Sale)
+```
+### Base ya cargada de IDEALISTA 2018 sin duplicados
+Valencia_Sale
+
+***
+
+# AED / Limpieza y Filtrado de la base
+
+Realizamos un `summary()` de las variables para observar valores anómalos o posibles variables que debamos eliminar:
+
+ - Cabe resaltar que solamente encontramos faltantes en la v.a: **CONSTRUCTIONYEAR**, **FLOORCLEAN** y **FLATLOCATIONID **
+
+ - Eliminamos **CONSTRUCTIONYEAR** ya que contiene muchos valores faltantes y atípicos. Además no es una variable importante ya que **CADCONSTRUCTIONYEAR** realiza la misma función y de forma más correcta.
+ 
+ - En esta última variable vemos dos valores anómalos que son 1591 y 1671 (unas fechas demasiado antiguas), que podemos eliminar sin problema.
+ 
+ - Hemos encontrado una vivienda con 81 habitaciones, algo imposible para los 90m^2 que posee. Por esta razón, hemos decidido eliminarla.
+ 
+ - Después de eliminar la vivienda anómala, hemos observado dos viviendas con 15 habitaciones, pero estas parecen correctas debido a que su precio y m^2 es razonablemente alto.
+ 
+ - Hemos identificado una vivienda con 8 habitaciones y 12 baños, valor que consideramos anómalo por lo que eliminamos la fila.
+ 
+ - Eliminamos también la variable **PARKINGSPACEPRICE** dado que no nos aporta información relevante y contiene muchos datos anómalos (precios de 1€).
+ A continuación, mostramos mediante la librería **ggplot2** en R, un histograma con la frecuencia de precios de Parking divididos en 2 intervalos (de 0 a 1€ y más de 1€). Como bien apreciamos, la frecuencia de Parkings con el precio de 1€ es enorme, algo que no tiene sentido alguno.
+ 
+ - Eliminamos la variable FLATLOCATIONID ya que cuenta con más de 4000 datos faltantes, un número considerable, y no es una variable muy relevante para el análisis.
+
+
+Por otra parte, hemos comparado si el **FLOORCLEAN** (nº de piso) concuerda con el nº de piso máx. registrado en el catastro.
+Se han encontrado 1028 pisos con un **FLOORCLEAN** > **CADMAXBUILDINGFLOOR**, no obstante, después de habernos informado sobre el tema, hemos llegado a las siguientes posibilidades:
+
+ - **La posible existencia de entreplantas o plantas técnicas:** En algunos edificios, hay plantas intermedias (como entresuelos, plantas técnicas o plantas de instalaciones) que no se cuentan en la numeración habitual pero sí en el Catastro.
+
+ - **Modificaciones en la estructura del edificio:** Si se han hecho reformas o ampliaciones, la numeración interna del edificio pudo cambiar, pero el Catastro puede reflejar la estructura original.
+
+
+Siguiendo esta línea hemos averiguado los anuncios con más baños que habitaciones (algo poco habitual), y separamos en 2 casos:
+
+ -  Los pisos con 0 habitaciones y baños, son estudios, es totalmente normal que tenga baño/s.
+
+ -  Habiendo observado las viviendas con más baños que viviendas, hemos apreciado que la mayoría tienen un precio muy elevado, y esto justificaría el mayor nº de baños. 
+Muchas casas grandes o de lujo tienen un baño privado en cada habitación (en suite), más baños adicionales para visitas o zonas comunes --> Ejemplo: Una mansión con 3 dormitorios y 5 baños (baños en cada habitación, uno de servicio y uno de cortesía).
+
+Por lo tanto dejaremos estas viviendas anunciadas en la base de datos.
+
+Continuamos con pisos que no son estudios y tienen 0 habitaciones (contamos con 40). No los tendremos en cuenta en nuestro proyecto, ya que no nos aportan nada al proyecto y la mayoría son datos anómalos erróneos.
+
+- **Transformación**: El ratio RHabitacion_Baño (número de baños por habitación) es una métrica útil para analizar la distribución de espacios en una vivienda y compararla con otras propiedades en el mercado inmobiliario. Nos puede servir además para indicar la comodidad de la vivienda: 
+Un valor alto indica que hay más baños por habitación, lo que puede ser un signo de mayor comodidad y funcionalidad en la vivienda.
+     
+
+
+```{r summary, echo=TRUE}
+# Eliminamos CONSTRUCTIONYEAR
+Valencia_Sale$CONSTRUCTIONYEAR <- NULL
+
+# Eliminamos las viviendas de 1591 y 1671
+Valencia_Sale <- Valencia_Sale[Valencia_Sale$CADCONSTRUCTIONYEAR != 1591 & Valencia_Sale$CADCONSTRUCTIONYEAR != 1671, ]
+
+ggplot(Valencia_Sale, aes(x = as.factor(1), y = ROOMNUMBER)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot del Número de Habitaciones",
+       x = "",
+       y = "Número de Habitaciones") +
+  theme_minimal()
+
+ggplot(Valencia_Sale, aes(x = as.factor(1), y = BATHNUMBER)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", notch = TRUE) +
+  coord_flip() +  # Lo hace horizontal
+  labs(title = "Boxplot del Número de Baños",
+       x = "",
+       y = "Número de Baños") +
+  theme_minimal()
+
+
+
+# Eliminamos las viviendas con 81 habitaciones y 12 baños
+Valencia_Sale <- Valencia_Sale[Valencia_Sale$ROOMNUMBER != 81, ]
+Valencia_Sale <- Valencia_Sale[Valencia_Sale$BATHNUMBER != 12, ]
+
+# Crear una variable categórica para los intervalos
+Valencia_Sale$Precio_Categoria <- cut(Valencia_Sale$PARKINGSPACEPRICE, 
+                                      breaks = c(0, 1, Inf), 
+                                      labels = c("0 - 1€", "> 1€"),
+                                      include.lowest = TRUE)
+
+# Graficar el histograma con ggplot2
+ggplot(Valencia_Sale, aes(x = Precio_Categoria)) +
+  geom_bar(fill = "lightblue", color = "darkblue") +
+  labs(title = "Histograma de Precios de Parking",
+       x = "Intervalos de Precio (€)",
+       y = "Frecuencia") +
+  theme_minimal()
+
+
+
+
+# Eliminamos PARKINGSPACEPRICE
+Valencia_Sale$PARKINGSPACEPRICE <- NULL
+
+# Eliminamos FLATLOCATIONID
+Valencia_Sale$FLATLOCATIONID <- NULL
+
+
+# viviendas donde FLOORCLEAN > CADMAXBUILDINGFLOOR
+catastros_erroneos <- subset(Valencia_Sale, FLOORCLEAN > CADMAXBUILDINGFLOOR)
+# viviendas donde BATHNUMBER > ROOMNUMBER y no son estudios
+banyos_erroneos <- subset(Valencia_Sale, BATHNUMBER > ROOMNUMBER & ROOMNUMBER > 0)
+
+no_estudios <- subset(Valencia_Sale, ISSTUDIO == 1 & ROOMNUMBER != 0)
+
+# eliminamos las viviendas abiertas que no tienen habitaciones y no son estudios
+pisos_abiertos <- subset(Valencia_Sale, ISSTUDIO != 1 & ROOMNUMBER == 0)
+Valencia_Sale <- anti_join(Valencia_Sale, pisos_abiertos, by = c("ASSETID", "PRICE"))
+
+descVal <- data.frame(
+  "variable" = colnames(Valencia_Sale),
+  "tipo" = c(rep("categorical", 2), rep("numerical", length(colnames(Valencia_Sale)) - 2)), 
+  stringsAsFactors = FALSE
+)
+
+Valencia_Sale$RHabitacion_Banyo <- ifelse(Valencia_Sale$ROOMNUMBER == 0, 0, Valencia_Sale$BATHNUMBER / Valencia_Sale$ROOMNUMBER)
+
+```
+
+Una vez terminada la limpieza, realizaremos un AED más exhaustivo y preciso.
+
+```{r AED exhautivo, echo=TRUE}
+
+media_precios_2018 = mean(Valencia_Sale$PRICE)
+
+mediana_precios_2018 = median(Valencia_Sale$PRICE)
+
+summary(Valencia_Sale$PRICE)
+
+
+# Creamos una nueva variable llamada SIZE, donde se clasificará cada vivienda en PEQUEÑA(20 - 70 m^2), MEDIANA(70 - 120 m^2) y GRANDE(+120 m^2) según los metros cuadrados en CONSTRUCTEDAREA. Convertimos también la variable a categórica
+Valencia_Sale <- Valencia_Sale %>%
+  mutate(SIZE = case_when(
+    CONSTRUCTEDAREA >= 20 & CONSTRUCTEDAREA <= 70 ~ "Pequeña",
+    CONSTRUCTEDAREA > 70 & CONSTRUCTEDAREA <= 120 ~ "Mediana",
+    CONSTRUCTEDAREA > 120 ~ "Grande"
+  ))  
+Valencia_Sale$SIZE <- factor(Valencia_Sale$SIZE, 
+                           levels = c("Pequeña", "Mediana", "Grande"),
+                           ordered = TRUE)
+
+# Ahora, calculamos la media y la mediana de precios por tamaño
+precios_por_SIZE = Valencia_Sale %>%
+  group_by(SIZE) %>%
+  summarise(
+    n = n(),  # cantidad de viviendas por categoría
+    promedio_precio = mean(PRICE, na.rm = TRUE),
+    mediana_precio = median(PRICE, na.rm = TRUE),
+    min_precio = min(PRICE, na.rm = TRUE),
+    max_precio = max(PRICE, na.rm = TRUE),
+    sd_precio = sd(PRICE, na.rm = TRUE)
+  )
+
+barrios = read_delim("../data/barris.csv", delim = ";", show_col_types = FALSE)
+barrios$geometry <- geojson_sf(barrios$geo_shape)$geometry
+barrios_sf <- st_as_sf(barrios, sf_column_name = "geometry", crs = 4326)
+valencia_sf <- st_as_sf(Valencia_Sale, coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+Valencia_Sale <- st_join(valencia_sf, barrios_sf[, c("Nombre")])
+Valencia_Sale <- Valencia_Sale %>%
+  rename(BARRIO = 'Nombre')
+Valencia_Sale$BARRIO = as.factor(Valencia_Sale$BARRIO)
+
+
+media_por_barrio = Valencia_Sale %>%
+  group_by(BARRIO) %>%
+  summarise(
+    media_price = mean(PRICE, na.rm = TRUE),
+    cantidad_pisos = n()
+  )
+
+```
+Comprobaremos si existen pisos que no han tenido un barrio asignado.
+
+```{r}
+sum(is.na(Valencia_Sale$BARRIO))   # ver el número de pisos faltantes, sin barrio asignado
+```
+Observamos como contamos con 27 pisos que no cuentan con un barrio asignado. Es un valor pequeño de datos con faltantes, por ello decidimos eliminarlos del dataframe.
+
+```{r}
+Valencia_Sale <- Valencia_Sale %>%
+  filter(!is.na(BARRIO))
+```
+
+
+
+```{r , echo=TRUE}
+cor(Valencia_Sale$PRICE, Valencia_Sale$CONSTRUCTEDAREA, use = "complete.obs", method = "pearson")
+
+ggplot(Valencia_Sale, aes(x = SIZE, y = PRICE)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Relación entre metros cuadrados y precio",
+       x = "Metros cuadrados",
+       y = "Precio")
+```
+El análisis de correlación entre el área construida (CONSTRUCTEDAREA) y el precio de venta (PRICE) de la vivienda muestra un coeficiente de Pearson de 0.776. 
+
+Esto podría indicar una fuerte relación positiva entre ambas variables. Esto sugiere que, en general, a mayor tamaño de construcción, mayor es el precio de venta de la vivienda.
+
+Por otra parte, observando el scatter plot, podemos reforzar nuestras conclusiones.
+
+- Tamaño pequeño: La mayoría de los precios son "bajos", solamente uno de ellos supera los 500.000 €.
+
+- Tamaño mediano: Los precios tienden a ser más altos que los de las viviendas pequeñas, pero siguen concentrados en precios relativamente accesibles, con algunos valores atípicos caros.
+
+- Tamaño grande: Se observa una gran dispersión de precios, incluyendo las viviendas más caras del conjunto, algunas llegando a superar la barrera de los 2 millones de euros.
+
+
+El gráfico confirma que existe una relación positiva entre el tamaño de la vivienda y su precio: las viviendas más grandes tienden a alcanzar precios más elevados. Sin embargo, se observa también una mayor variabilidad en el precio entre las viviendas grandes, lo que sugiere que además del tamaño, otros factores (como ubicación, nºde baños, ...) podrían llegar a influir sobre el precio de venta.
+
+
+
+
+
+Para poder estudiar las variables que influyen sobre cada piso dependiendo del barrio en el que se encuentre, deberemos de seguir diversos pasos que nos llevarán a poder conseguirlo.
+
+Primeramente, agruparemos los barrios en distritos -> En Valencia hay más de 80 barrios, pero solo 19 distritos. Usar distritos reduce la complejidad y mejora la visualización y comunicación de resultados.
+
+Además, los distritos son divisiones oficiales del ayuntamiento de Valencia, utilizadas en censos, estadísticas urbanas, presupuestos municipales, etc. Seguir esta estructura permite que nuestros análisis sean comparables con fuentes oficiales.
+
+```{r}
+Valencia_Sale$BARRIO <- as.character(Valencia_Sale$BARRIO)
+
+# barrios_unicos <- unique(Valencia_Sale$BARRIO) para poder saber todos los barrios que tenemos
+
+# los distritos los sacamos directamente de la web de Idealista
+distritos <- c(
+  "Extramurs", "Ciutat Vella", "L'Eixample", "Benicalap", "Patraix", "Campanar",
+  "Quatre Carreres", "El Pla del Real", "Rascanya", "Benimaclet", "L'Olivereta", "Jesús",
+  "La Saïdia", "Camins al Grau", "Poblats Marítims", "Algirós", "La Patacona", "Alboraya Centro")
+
+
+# le asignamos a cada barrio su distrito correspondiente, basándonos en la división administrativa oficial de Valencia 
+
+barrio_distrito <- c(
+  # Ciutat Vella
+  "LA SEU" = "Ciutat Vella", "LA XEREA" = "Ciutat Vella", "EL CARME" = "Ciutat Vella",
+  "EL MERCAT" = "Ciutat Vella", "EL PILAR" = "Ciutat Vella", "SANT FRANCESC" = "Ciutat Vella",
+  
+  # L'Eixample
+  "RUSSAFA" = "L'Eixample", "LA GRAN VIA" = "L'Eixample", "EL PLA DEL REMEI" = "L'Eixample",
+  
+  # Extramurs
+  "EL BOTANIC" = "Extramurs", "LA ROQUETA" = "Extramurs", "LA PETXINA" = "Extramurs", "ARRANCAPINS" = "Extramurs",
+  
+  # Campanar
+  "CAMPANAR" = "Campanar", "SANT PAU" = "Campanar", "LES TENDETES" = "Campanar",
+  
+  # La Saïdia
+  "EL CALVARI" = "La Saïdia", "MARXALENES" = "La Saïdia", "MORVEDRE" = "La Saïdia", 
+  "TRINITAT" = "La Saïdia", "ELS ORRIOLS" = "La Saïdia", "TORMOS" = "La Saïdia",
+  
+  # El Pla del Real
+  "EXPOSICIO" = "El Pla del Real", "MESTALLA" = "El Pla del Real", 
+  "JAUME ROIG" = "El Pla del Real", "CIUTAT UNIVERSITARIA" = "El Pla del Real",
+  
+  # L'Olivereta
+  "NOU MOLES" = "L'Olivereta", "TRES FORQUES" = "L'Olivereta", "LA FONTSANTA" = "L'Olivereta",
+  "LA LLUM" = "L'Olivereta", "SOTERNES" = "L'Olivereta",
+  
+  # Patraix
+  "PATRAIX" = "Patraix", "SAFRANAR" = "Patraix", "SANT ISIDRE" = "Patraix",
+  "LA RAIOSA" = "Patraix", "L'HORT DE SENABRE" = "Patraix", "FAVARA" = "Patraix",
+  "FAITANAR" = "Patraix", "VARA DE QUART" = "Patraix",
+  
+  # Jesús
+  "LA CREU COBERTA" = "Jesús", "SANT MARCEL.LI" = "Jesús", "CAMI REAL" = "Jesús",
+  
+  # Quatre Carreres
+  "MONTOLIVET" = "Quatre Carreres", "NA ROVELLA" = "Quatre Carreres", "EN CORTS" = "Quatre Carreres",
+  "MALILLA" = "Quatre Carreres", "LA PUNTA" = "Quatre Carreres",
+  "CIUTAT DE LES ARTS I DE LES CIENCIES" = "Quatre Carreres", "LA FONTETA S.LLUIS" = "Quatre Carreres",
+  
+  # Poblats Marítims
+  "EL GRAU" = "Poblats Marítims", "AIORA" = "Poblats Marítims", "CABANYAL-CANYAMELAR" = "Poblats Marítims",
+  "LA MALVA-ROSA" = "Poblats Marítims", "BETERO" = "Poblats Marítims", "LA CREU DEL GRAU" = "Poblats Marítims",
+  "NATZARET" = "Poblats Marítims",
+  
+  # Camins al Grau
+  "CAMI FONDO" = "Camins al Grau", "PENYA-ROJA" = "Camins al Grau", "LA VEGA BAIXA" = "Camins al Grau",
+  
+  # Algirós
+  "L'AMISTAT" = "Algirós", "ALBORS" = "Algirós", "CIUTAT JARDI" = "Algirós",
+  "L'ILLA PERDUDA" = "Algirós", "LA CARRASCA" = "Algirós",
+  
+  # Benimaclet
+  "BENIMACLET" = "Benimaclet", "CAMI DE VERA" = "Benimaclet",
+  
+  # Rascanya
+  "SANT LLORENS" = "Rascanya", "TORREFIEL" = "Rascanya", "SANT ANTONI" = "Rascanya",
+  
+  # Benicalap
+  "BENICALAP" = "Benicalap", "CIUTAT FALLERA" = "Benicalap", "BENIFERRI" = "Benicalap",
+  "POBLE NOU" = "Benicalap",
+  
+  # La Patacona / Alboraya
+  "LA PATACONA" = "La Patacona",
+  "ALBORAIA CENTRO" = "Alboraya Centro"
+)
+
+
+Valencia_Sale <- Valencia_Sale %>%
+  mutate(DISTRITO = recode(BARRIO, !!!barrio_distrito))
+
+Valencia_Sale$DISTRITO <- as.character(Valencia_Sale$DISTRITO) # pasamos la columna a tipo texto
+
+sum(is.na(Valencia_Sale$DISTRITO))   # ver el número de pisos faltantes, sin distrito asignado
+```
+Hemos asignado a cada barrio su distrito correspondiente. Asimismo, hemos comprobado que no hay ningún piso que no tenga un distrito asignado (no hay valores faltantes).
+
+
+Posteriormente, para facilitar nuestro análisis crearemos una nueva variable RANGO_PRECIO, que clasifique las viviendas en 3 tipos, Barato-Medio-Caro.
+
+De esta forma nos será más fácil determinar que características presentan los pisos de cada distrito dependiendo del RANGO_PRECIO donde se encuentren.
+
+```{r}
+hist(Valencia_Sale$PRICE,
+     breaks = 30,                # Número de barras (puedes ajustar)
+     col = "skyblue",            # Color de las barras
+     border = "white",           # Color del borde de las barras
+     main = "Histograma de precios de viviendas en Valencia",
+     xlab = "Precio (€)",
+     ylab = "Frecuencia")
+
+
+summary(Valencia_Sale$PRICE)
+```
+Después de haber analizado minuciosamente el histograma y el resumen estadístico de la variable PRICE, hemos decidido dividir los rangos de precio de la siguiente forma:
+
+ - Barato: < 100.000 €
+ 
+Se ajusta aproximadamente al 1er cuartil (97.000 €). Es más, el histograma muestra una enorme acumulación de viviendas con precios por debajo de 100.000 €.
+
+Incluye las viviendas más accesibles del mercado.
+
+
+- Medio: 100.000 € – 300.000 €
+
+Aquí se concentra la mayor parte del mercado, y donde el volumen comienza a caer gradualmente a partir de los 300k€. Cubre el rango entre el 1er y algo más allá del 3er cuartil (228.000 €).
+
+Incluye la mediana (148.000 €) y la mayoría del stock disponible.
+
+Refleja el mercado “normal” o promedio.
+
+
+- Caro: > 300.000 €
+
+Representa pisos por encima del rango común.
+
+A partir de los 300.000 €, la frecuencia en el histograma cae en picado. Es un indicio claro de que estamos entrando en el segmento de lujo o alto standing.
+
+```{r}
+Valencia_Sale$RANGO_PRECIO <- cut(
+  Valencia_Sale$PRICE,
+  breaks = c(-Inf, 100000, 300000, Inf),
+  labels = c("Barato", "Medio", "Caro"),
+  right = TRUE
+)
+
+table(Valencia_Sale$RANGO_PRECIO)
+```
+
+Ulteriormente, vamos a resaltar en cada distrito las variables que más influyen sobre cada rango de precio.
+
+Para ello solo vamos a tener en cuenta variables que compartamos con el dataframe de 2025, para poder usar el posterior modelo de predicción para este también.
+
+Antes de empezar, crearemos la variable Precio_m2 que nos explica el precio por metro cuadrado de la vivienda.
+
+```{r}
+Valencia_Sale$Precio_m2 <- round(Valencia_Sale$PRICE / Valencia_Sale$CONSTRUCTEDAREA, 2)
+
+library(dplyr)
+library(tidyr)
+library(sf)           # por si aún no estaba cargado
+
+modelo_vars <- c(
+  "CONSTRUCTEDAREA","ROOMNUMBER","BATHNUMBER",
+  "DISTANCE_TO_CITY_CENTER","DISTANCE_TO_METRO",
+  "Precio_m2","RHabitacion_Banyo"
+)
+
+vars_bin <- c( "HASLIFT","BUILTTYPEID_1","BUILTTYPEID_2","BUILTTYPEID_3")
+
+resumen <- Valencia_Sale %>%
+  st_drop_geometry() %>%
+  mutate(Precio_m2 = round(PRICE / CONSTRUCTEDAREA, 2)) %>%
+  group_by(DISTRITO, RANGO_PRECIO) %>%
+  summarise(
+    # Continuas: media, min, max, sd
+    across(
+      all_of(modelo_vars),
+      .fns = list(
+        media = \(x) mean(x, na.rm = TRUE),
+        min   = \(x) min(x, na.rm = TRUE),
+        max   = \(x) max(x, na.rm = TRUE),
+        sd    = \(x) sd(x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    # Binarias: solo media (sin sd)
+    across(
+      all_of(vars_bin),
+      .fns   = ~mean(.x, na.rm = TRUE),
+      .names = "{.col}_media"
+    ),
+    .groups = "drop"
+  )
+
+
+resumen_distritos <- resumen %>%
+  pivot_wider(
+    id_cols     = DISTRITO,
+    names_from  = RANGO_PRECIO,
+    values_from = -c(DISTRITO, RANGO_PRECIO),
+    names_glue  = "{.value}_{RANGO_PRECIO}",
+    values_fill = NA
+  )
+
+
+# 5) Lo convertimos a data.frame para verlo completo
+resumen_distritos <- as.data.frame(resumen_distritos)
+print(resumen_distritos)
+```
+Hemos creado un data frame paralelo en el que contamos con todos los distritos. Las columnas de este son la media de las variables seleccionadas (coincidentes con 2025), divididas en distintos rangos de precio. Además, sacaremos también los valores mínimos y máximos de cada variable, así como su desviación típica.
+
+Por otra parte, de las variables que son binarias hemos decidido sacar solamente la media y desviación típica, así podremos apreciar la tendencia más habitual de los pisos en determinados distritos dependiendo de su rango de precio.
+
+Esto se realiza para evitar aplanar la base de datos y juntar todos los tipos de pisos, así podemos conservar las diferencias y variabilidad entre ellos.
+
+Por otra parte, nuestro siguiente paso será la realización del clustering, así conseguiremos fácilmente agrupar distritos con características similares.
+
+Selección de variables para el modelo
+Variables en el dataframe de 2025 y las análogas en el de 2018:
+
+floor --> FLOORCLEAN
+price --> PRICE
+constructedarea --> CONSTRUCTEDAREA
+exterior --> Eliminar
+propertyType --> Eliminar
+rooms --> ROOMNUMBER
+bathrooms --> BATHNUMBER
+district --> DISTRITO
+distance --> DISTANCE_TO_CITY_CENTER
+status --> BUILTTYPEID_1, BUILTTYPEID_2, BUILTTYPEID_3
+hasLift --> HASLIFT
+priceByArea --> UNITPRICE
+distancia_min_estacion_m --> DISTANCE_TO_METRO
+RHabitacion_Banyo --> Hay que crearla
+
+Finalmente, variables como RHabitacion_Banyo y priceByArea las descartamos a la hora de hacer el modelo ya que al ser variables derivadas directamente de price/size o rooms/bathrooms generaría fuga de información. Na añadirían información nueva y pueden generar multicolinealidad. La multicolinealidad es un problema que puede surgir en los modelos de regresión lineal cuando dos o más variables independientes (predictoras) están altamente correlacionadas entre sí. Es decir, una variable independiente puede predecirse en gran medida a partir de otra.
+
+```{r}
+variables_usar <- c("FLOORCLEAN", "PRICE", "CONSTRUCTEDAREA", "ROOMNUMBER", "BATHNUMBER", "DISTRITO", "BUILTTYPEID_1", "BUILTTYPEID_2", "BUILTTYPEID_3","DISTANCE_TO_CITY_CENTER", "HASLIFT", "DISTANCE_TO_METRO")
+datosmodelo <- Valencia_Sale[, variables_usar]
+```
+
+Creamos una nueva columna llamada status en datosmodelo.Esta nueva columna sintetiza la información que antes estaba repartida en tres variables booleanas:BUILTTYPEID_1,BUILTTYPEID_2,BUILTTYPEID_3
+
+El valor de status se determina así:
+Si BUILTTYPEID_1==1, entonces status = "Nueva".
+Si BUILTTYPEID_1 no es 1 pero BUILTTYPEID_2==1, entonces status = "Restaurar".
+Si ninguna de las anteriores (es decir, solo queda la posibilidad de que BUILTTYPEID_3==1), entonces status = "BuenEstado".
+
+Esto simplifica el modelo, evita multicolinealidad y hace más fácil la interpretación y el tratamiento posterior en modelos estadísticos o de machine learning.
+
+Conviertimos la columna status en un factor de R, es decir, una variable categórica y eliminamos las columnas que ya no nos interesan.
+
+```{r}
+datosmodelo$status <- ifelse(datosmodelo$BUILTTYPEID_1 == 1, "Nueva",
+                        ifelse(datosmodelo$BUILTTYPEID_2 == 1, "Restaurar", "BuenEstado"))
+datosmodelo$status <- as.factor(datosmodelo$status)
+# Ahora puedes eliminar las 3 columnas dummy
+datosmodelo <- datosmodelo[, !(names(datosmodelo) %in% c("BUILTTYPEID_1", "BUILTTYPEID_2", "BUILTTYPEID_3"))]
+```
+
+
+Calculamos la matriz de correlaciones entre las varibles numéricas para evitar problemas de multicolinealidad.
+
+Dado que nuestro dataset tenía información espacial (columna geometry típica de objetos sf en R), procedimos a eliminarla usando st_drop_geometry(), ya que no aporta información relevante a nuestro análisis predictivo y podía generar errores con funciones estándar de R. Posteriormente, convertimos el resultado en un data.frame convencional para asegurar la compatibilidad con procedimientos estadísticos clásicos.
+
+```{r}
+datosmodelo <- as.data.frame(st_drop_geometry(datosmodelo))
+```
+```{r}
+names(datosmodelo)
+```
+
+```{r}
+library(corrplot)
+num_vars <- sapply(datosmodelo, is.numeric)
+datos_num <- datosmodelo[, num_vars, drop=FALSE]
+if (ncol(datos_num) > 1) {
+  cor_matrix <- cor(datos_num, use = "complete.obs")
+  corrplot(cor_matrix, method = "color")
+} else {
+  print("No hay suficientes variables numéricas para calcular correlación.")
+}
+```
+
+Tras calcular la matriz de correlación entre las variables numéricas principales, observo que las variables que más se relacionan con el precio son el número de habitaciones y de baños, ambas con correlación positiva moderada. Existe también cierta correlación entre número de habitaciones y baños, lo que es lógico pero podría requerir comprobar la multicolinealidad con un VIF. El resto de variables presentan correlaciones bajas, por lo que no se esperan problemas graves de redundancia en el modelo. Las variables de distancia al centro y al metro, aunque afectan negativamente al precio, lo hacen con una relación débil.
+
+Vamos a comenzar con los modelos. Separamos en train y test usando caret (por defecto 70% train, 30% test):
+
+```{r}
+set.seed(123) # Para reproducibilidad
+trainIndex <- createDataPartition(datosmodelo$PRICE, p = 0.7, list = FALSE)
+trainData <- datosmodelo[trainIndex, ]
+testData  <- datosmodelo[-trainIndex, ]
+```
+
+Antes de ajustar el modelo revisamos si tenemos datos faltantes:
+
+```{r}
+colSums(is.na(trainData))
+```
+
+Como la variable número de piso (FLOORCLEAN) es importante para el modelo y sólo el 3.5% aproximadamente de los valores estaban ausentes, decidimos imputar los valores faltantes con la mediana. Esto permite conservar la mayor cantidad de información posible sin introducir sesgos extremos, ya que la mediana es robusta ante valores atípicos.
+
+```{r}
+# Calculamos la mediana (ignorando los NA)
+mediana_floor <- median(datosmodelo$FLOORCLEAN, na.rm = TRUE)
+
+# Imputamos los NA con la mediana
+datosmodelo$FLOORCLEAN[is.na(datosmodelo$FLOORCLEAN)] <- mediana_floor
+```
+
+
+REGRESIÓN LINEAL MÚLTIPLE
+
+Usaremos 10-fold cross-validation. El modelo incluirá todas las variables numéricas y factores relevantes. Utilizamos PRICE como variable dependiente y todas las demás como predictoras.
+
+```{r}
+'
+# Configuración de la validación cruzada
+ctrl <- trainControl(method = "cv", number = 10)
+
+# Ajuste del modelo
+modelo_lm <- train(
+  PRICE ~ ., 
+  data = trainData, 
+  method = "lm",
+  trControl = ctrl
+)
+
+# Evaluación en test y métricas
+predicciones <- predict(modelo_lm, newdata = testData)
+rmse <- RMSE(predicciones, testData$PRICE)
+mae  <- MAE(predicciones, testData$PRICE)
+r2   <- R2(predicciones, testData$PRICE)
+cat("RMSE:", rmse, "\nMAE:", mae, "\nR2:", r2, "\n")
+'
+```
+
+Nos da error, nos aseguramos por si acaso de si hay columnas constantes y no hay, nos aseguramos de que todos los nombres de las columnas son válidos para fórmulas en R
+
+```{r}
+names(trainData) <- make.names(names(trainData))
+names(testData)  <- make.names(names(testData))
+```
+
+Tenemos variables que son en realidad factores (por ejemplo, HASLIFT como 0/1), probaremos en  convertirlas explícitamente a factor:
+
+```{r}
+trainData$HASLIFT <- as.factor(trainData$HASLIFT)
+testData$HASLIFT  <- as.factor(testData$HASLIFT)
+```
+
+Para que el modelo pueda manejar correctamente las variables categóricas, como 'DISTRITO', he realizado una codificación one-hot (variables dummy), de modo que cada distrito se representa como una columna binaria. Así, el modelo lineal puede estimar el efecto específico de cada distrito sin perder información relevante
+
+```{r}
+# Crear el transformador de variables dummy EXCLUYENDO ASSETID
+dummies <- dummyVars(PRICE ~ ., data = datosmodelo)
+
+# Aplica el transformador a los datos
+datos_dummies <- predict(dummies, newdata = datosmodelo)
+
+# Combina SIZE original, ASSETID y PRICE con los predictores ya dummificados
+datos_listo <- data.frame(                   # Tu variable float original
+  datos_dummies,                       # Todos los predictores categóricos transformados
+  PRICE = datosmodelo$PRICE            # Variable objetivo
+)
+
+# División train/test 
+set.seed(129)
+trainIndex <- createDataPartition(datos_listo$PRICE, p = 0.7, list = FALSE)
+trainData <- datos_listo[trainIndex, ]
+testData  <- datos_listo[-trainIndex, ]
+
+# Entrenamiento del modelo (especifica que ASSETID NO es predictor)
+ctrl <- trainControl(method = "cv", number = 10)
+```
+
+```{r}
+modelo_lm <- train(
+PRICE ~ .,     
+  data = trainData,
+  method = "lm",
+  trControl = ctrl
+)
+
+# Evaluación en test y métricas
+predicciones <- predict(modelo_lm, newdata = testData)
+rmse <- RMSE(predicciones, testData$PRICE)
+mae  <- MAE(predicciones, testData$PRICE)
+r2   <- R2(predicciones, testData$PRICE)
+cat("RMSE:", rmse, "\nMAE:", mae, "\nR2:", r2, "\n")
+```
+
+```{r}
+# Para ver cómo se comporta el modelo
+
+library(scales)
+
+comparacion <- data.frame(Real = testData$PRICE, Predicho = predicciones)
+
+ggplot(comparacion, aes(x = Real, y = Predicho)) +
+  geom_point(aes(color = "Predicción"), alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  scale_x_continuous(labels = comma, name = "Precio real (€)") +
+  scale_y_continuous(labels = comma, name = "Precio predicho (€)") +
+  scale_color_manual(name = "Leyenda", values = c("Predicción" = "black")) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho",
+    subtitle = "Modelo de Regresión Lineal",
+    caption = "Línea roja = ajuste perfecto (y = x)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
+# Para ver qué variables son más relevantes para el modelo
+
+importancia <- varImp(modelo_lm, scale = TRUE)
+importancia_df <- importancia$importance
+importancia_df$variable <- rownames(importancia_df)
+library(dplyr)
+importancia_df <- arrange(importancia_df, desc(Overall))
+
+ggplot(importancia_df, aes(x = reorder(variable, Overall), y = Overall)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Importancia de las variables (Regresión Lineal)",
+       x = "Variable",
+       y = "Importancia (relativa)") +
+  theme_minimal()
+```
+
+El modelo de regresión lineal múltiple obtiene un R² de 0.60, lo que indica que explica el 60% de la variabilidad del precio de los inmuebles. El error absoluto medio (MAE) es de 65.000 € y el error cuadrático medio (RMSE) alcanza los 110.000 €. Como se observa en la gráfica, el ajuste es bueno para la mayoría de los inmuebles, especialmente en rangos de precio bajos y medios. Sin embargo, el modelo tiende a subestimar los precios más altos, lo que se traduce en errores significativos para inmuebles de alto valor. Estos resultados sugieren que, aunque el modelo es útil para obtener una estimación inicial, sería recomendable emplear modelos más complejos o incorporar variables adicionales para mejorar su precisión, sobre todo en los extremos del rango de precios. El análisis de importancia de variables del modelo de regresión lineal muestra que el número de baños, el distrito (especialmente L’Eixample), la superficie y el estado del inmueble son los factores que más influyen en el precio de la vivienda. La localización, tanto a nivel de distrito como de proximidad al centro y al transporte público, también juega un papel relevante. Por el contrario, variables como el número de habitaciones o la existencia de ascensor tienen un impacto mucho menor en la predicción del precio según este modelo. Estos resultados son coherentes con el conocimiento del mercado inmobiliario, donde la localización y las características básicas del inmueble suelen ser los principales determinantes del valor.
+
+RANDOM FOREST
+
+```{r}
+set.seed(129)
+
+ctrl <- trainControl(method = "cv", number = 3)
+
+modelo_rf <- train(
+PRICE ~ .,
+  data = trainData,
+  method = "rf",
+  trControl = ctrl,
+  importance = TRUE,
+  ntree = 50
+)
+
+# Evaluación
+pred_rf <- predict(modelo_rf, newdata = testData)
+rmse_rf <- RMSE(pred_rf, testData$PRICE)
+mae_rf  <- MAE(pred_rf, testData$PRICE)
+r2_rf   <- R2(pred_rf, testData$PRICE)
+cat("Random Forest - RMSE:", rmse_rf, "\nMAE:", mae_rf, "\nR2:", r2_rf, "\n")
+```
+
+```{r}
+saveRDS(modelo_rf, file = "../models/modelo_lm.rds")
+```
+
+```{r}
+df_pred <- data.frame(
+  PrecioReal = testData$PRICE,
+  PrecioPredicho = pred_rf
+)
+
+ggplot(df_pred, aes(x = PrecioReal, y = PrecioPredicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho",
+    subtitle = "Random Forest",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal()
+
+var_imp <- varImp(modelo_rf)
+plot(var_imp, top = 20, main = "Importancia de las variables (Random Forest)")
+```
+
+El modelo Random Forest ha mejorado claramente el ajuste respecto a la regresión lineal, alcanzando un MAE de 37.000€ y un R² de 0,79. El gráfico de dispersión muestra una buena alineación entre los precios reales y predichos, aunque persiste cierta subestimación en los precios más altos y algunos outliers. 
+
+Ha identificado la distancia al centro de la ciudad como la variable con mayor impacto en el precio de la vivienda, seguida del número de baños, el número de piso y la proximidad al metro. Además, la pertenencia a ciertos distritos, como Campanar o Camins al Grau, también resulta determinante. A diferencia del modelo lineal, donde el tamaño y el número de baños eran claramente predominantes, en este modelo las variables de localización y accesibilidad ganan protagonismo, lo que sugiere que el Random Forest es capaz de captar relaciones no lineales y efectos de interacción entre variables. Es habitual que la importancia cambie al pasar de un modelo lineal a uno basado en árboles, ya que cada algoritmo interpreta y pondera las relaciones de forma diferente.
+
+En resumen, el modelo confirma que el precio de la vivienda depende de una combinación de características físicas (baños, superficie) y factores de localización, siendo estos últimos especialmente relevantes cuando se utilizan modelos más complejos.
+
+Vamos a probar a mejorar el modelo cambiando el número de árboles y el número de cross validation anque esto va a suponer un cambio en el tiempo de cóomputo. Además, aplicaremos grid search de mtry. Con doParallel aprovechamos todos los núcleos de nuestro CPU:
+
+```{r}
+'
+set.seed(129)
+
+tunegrid <- expand.grid(.mtry = c(2, 6, 10))
+ctrl <- trainControl(method = "repeatedcv", number = 3, repeats = 1)
+
+library(doParallel)
+cl <- makePSOCKcluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+
+modelo_rf <- train(
+  PRICE ~ . -ASSETID,
+  data = trainData,
+  method = "rf",
+  trControl = ctrl,
+  tuneGrid = tunegrid,
+  ntree = 150,         # con 500 no funciona
+  importance = TRUE
+)
+
+stopCluster(cl)
+
+# Evaluación
+pred_rf <- predict(modelo_rf, newdata = testData)
+rmse_rf <- RMSE(pred_rf, testData$PRICE)
+mae_rf  <- MAE(pred_rf, testData$PRICE)
+r2_rf   <- R2(pred_rf, testData$PRICE)
+cat("Random Forest - RMSE:", rmse_rf, "\nMAE:", mae_rf, "\nR2:", r2_rf, "\n")
+'
+```
+
+No se observan mejoras relevantes en el rendimiento del modelo tras los ajustes realizados.
+El Random Forest parece estar ya en su “techo” de capacidad predictiva para los datos actuales. El MAE se mantiene en torno a 37k–38k€, y el R² en torno a 0,79. 
+
+Cuando un modelo está casi optimizado, pequeños cambios en hiperparámetros (como mtry, ntree o el número de folds) no suelen mejorar mucho el error, y a veces la variación se debe solo al azar del split de datos o al propio Random Forest.
+El rango de error se mantiene estable, lo que indica que el modelo ya está capturando casi toda la información relevante de los datos.
+
+(Nos da un error para ejecutar el siguiente y como relamente no hay cambios lo comentamos)
+
+XGBoost
+
+Suele ofrecer mejor precisión que Random Forest.
+Es más rápidos para entrenar.
+Permite controlar el overfitting fácilmente
+Tiene muchas opciones de tuning
+
+```{r}
+set.seed(129)
+
+# Grid de hiperparámetros básico
+tunegrid <- expand.grid(
+  nrounds = 100,           # número de iteraciones
+  max_depth = c(3, 6, 9),  # profundidad de los árboles
+  eta = c(0.05, 0.1, 0.3), # learning rate
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+
+xgb_model <- train(
+PRICE ~ .,
+  data = trainData,
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = tunegrid,
+  verbose = FALSE
+)
+
+# Evaluación
+pred_xgb <- predict(xgb_model, newdata = testData)
+rmse_xgb <- RMSE(pred_xgb, testData$PRICE)
+mae_xgb  <- MAE(pred_xgb, testData$PRICE)
+r2_xgb   <- R2(pred_xgb, testData$PRICE)
+cat("XGBoost - RMSE:", rmse_xgb, "\nMAE:", mae_xgb, "\nR2:", r2_xgb, "\n")
+```
+
+```{r}
+saveRDS(modelo_lgb, file = "../models/modelo_lgb.rds")
+```
+```{r}
+df_pred_xgb <- data.frame(
+  PrecioReal = testData$PRICE,
+  PrecioPredicho = pred_xgb
+)
+
+ggplot(df_pred_xgb, aes(x = PrecioReal, y = PrecioPredicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho",
+    subtitle = "XGBoost",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal()
+
+var_imp_xgb <- varImp(xgb_model)
+plot(var_imp_xgb, top = 20, main = "Importancia de las variables (XGBoost)")
+```
+
+El gráfico de dispersión del modelo XGBoost muestra que, aunque el modelo predice de forma aceptable la mayoría de los precios, la precisión disminuye considerablemente en los inmuebles de mayor valor, donde tiende a subestimar el precio real. Esta dispersión en los valores altos indica que el modelo XGBoost no se ajusta tan bien como el Random Forest para el problema planteado, por lo que se recomienda priorizar el uso de Random Forest como modelo final.
+
+El análisis de importancia de variables en el modelo XGBoost revela que el tamaño de la vivienda y el número de baños son con diferencia los factores más relevantes para la predicción del precio. A continuación, la localización, especialmente la distancia al centro de la ciudad y al metro, también tienen un papel importante. Otras variables, como el distrito o el estado del inmueble, contribuyen en menor medida.
+
+LIGHTGBM
+
+No fue posible entrenar LightGBM utilizando caret, ya que este modelo no está incluido en la librería nativa de caret. Se optó por entrenar LightGBM directamente con su propio paquete, lo que permite igualmente comparar sus resultados con los de otros modelos y analizar su desempeño en la predicción del precio de las viviendas.
+
+```{r}
+
+library(lightgbm)
+
+# Prepara los datos en formato matrix y vector
+train_x <- as.matrix(subset(trainData, select = -PRICE))
+train_y <- trainData$PRICE
+
+test_x <- as.matrix(subset(testData, select = -PRICE))
+test_y <- testData$PRICE
+
+# Crea datasets de lightgbm
+dtrain <- lgb.Dataset(data = train_x, label = train_y)
+
+# Ajusta el modelo
+params <- list(
+  objective = "regression",
+  metric = "rmse"
+)
+
+modelo_lgb <- lgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100
+)
+
+# Predicciones
+pred_lgb <- predict(modelo_lgb, test_x)
+
+# Métricas de evaluación
+rmse_lgb <- sqrt(mean((test_y - pred_lgb)^2))
+mae_lgb <- mean(abs(test_y - pred_lgb))
+r2_lgb <- 1 - sum((test_y - pred_lgb)^2) / sum((test_y - mean(test_y))^2)
+
+cat("LightGBM - RMSE:", rmse_lgb, "\nMAE:", mae_lgb, "\nR2:", r2_lgb, "\n")
+```
+
+```{r}
+df_disp <- data.frame(
+  Precio_Real = test_y,
+  Precio_Predicho = pred_lgb
+)
+
+ggplot(df_disp, aes(x = Precio_Real, y = Precio_Predicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed", size = 1.2) +
+  labs(
+    title = "Comparación entre Precio Real y Precio Predicho\nLightGBM",
+    x = "Precio real (€)",
+    y = "Precio predicho (€)"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+
+# Obtener importancia de variables del modelo LightGBM
+importancia <- lgb.importance(modelo_lgb)
+importancia$Feature <- factor(importancia$Feature, levels = importancia$Feature[order(importancia$Gain, decreasing = TRUE)])
+
+ggplot(importancia, aes(x = Gain, y = Feature)) +
+  geom_point(size = 3, colour = "blue") +
+  labs(
+    title = "Importancia de las variables (LightGBM)",
+    x = "Importancia",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+El modelo LightGBM logra un rendimiento similar al de XGBoost, con buen ajuste en la mayoría de los casos pero dificultades para predecir correctamente los precios más altos, donde tiende a subestimar el valor de las viviendas. Comparando las métricas y la dispersión de los gráficos, se confirma que el modelo Random Forest sigue siendo el que ofrece mejores resultados globales, tanto en precisión como en estabilidad a lo largo de todo el rango de precios. 

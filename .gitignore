@@ -1,0 +1,29 @@
+# R
+.Rhistory
+.Rdata
+.RData
+.Ruserdata
+*.Rproj.user
+*.Rproj
+
+# Modelos entrenados (pesados)
+models/*.rds
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Archivos originales (ya reorganizados en data/ y models/)
+Archivos originales/
+
+# Carpeta antigua
+archive/
