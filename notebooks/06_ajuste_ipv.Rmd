@@ -255,3 +255,61 @@ ggplot(df_disp2, aes(x = Precio_Real, y = Precio_Predicho)) +
   scale_x_continuous(labels = scales::comma) +
   scale_y_continuous(labels = scales::comma)
 ```
+
+## Cálculo y guardado del factor IPV real
+
+En este bloque se calcula el **factor de corrección IPV real** a partir de los datos oficiales del INE (Índice de Precios de la Vivienda, Comunitat Valenciana, serie general). El factor se obtiene dividiendo el IPV del último trimestre disponible entre el IPV del primer trimestre de 2018, que es el período en el que se entrenó el modelo.
+
+El resultado se guarda como un archivo `.rds` para que la aplicación Shiny lo cargue dinámicamente, evitando que el factor esté hardcodeado en el código de la app.
+
+```{r calcular_y_guardar_factor_ipv}
+# ── Carga del Excel del INE ────────────────────────────────────────────────────
+datos_ipv_raw <- suppressMessages(suppressWarnings(
+  read_excel("../data/IPV_ComunidadValenciana.xlsx")
+))
+
+# ── Extracción de la serie de índices ─────────────────────────────────────────
+# Fila 7  = etiquetas de trimestres (orden descendente: 2024T4 → 2007T1)
+# Fila 13 = IPV General Comunitat Valenciana (solo primeras 72 columnas = índices)
+N_TRIM <- 72   # Las primeras 72 columnas de datos son la serie de índices
+
+trimestres_ipv <- as.character(unlist(datos_ipv_raw[7,  2:(N_TRIM + 1)]))
+valores_ipv    <- as.numeric(unlist(datos_ipv_raw[13, 2:(N_TRIM + 1)]))
+
+# ── Identificar trimestres clave ───────────────────────────────────────────────
+# Las columnas van de más reciente (izq.) a más antiguo (dcha.)
+# → El más antiguo de 2018 (2018T1) es el último índice entre los de 2018
+idx_2018      <- grep("^2018", trimestres_ipv)
+ipv_2018T1    <- valores_ipv[max(idx_2018)]   # IPV 2018T1
+trim_2018T1   <- trimestres_ipv[max(idx_2018)]
+
+ipv_ultimo    <- valores_ipv[1]               # IPV más reciente disponible
+trim_ultimo   <- trimestres_ipv[1]
+
+# ── Calcular el factor ────────────────────────────────────────────────────────
+factor_ipv_real <- ipv_ultimo / ipv_2018T1
+
+cat("═══════════════════════════════════════════════════\n")
+cat(sprintf("Serie: IPV General Comunitat Valenciana (INE)\n"))
+cat(sprintf("IPV de referencia  (%s): %.3f\n", trim_2018T1, ipv_2018T1))
+cat(sprintf("IPV más reciente   (%s): %.3f\n", trim_ultimo,  ipv_ultimo))
+cat(sprintf("FACTOR IPV REAL    = %.3f / %.3f = %.4f\n",
+            ipv_ultimo, ipv_2018T1, factor_ipv_real))
+cat("═══════════════════════════════════════════════════\n")
+
+# ── Guardar en RDS para la app de Shiny ───────────────────────────────────────
+ipv_info <- list(
+  factor          = round(factor_ipv_real, 4),
+  ipv_2018T1      = ipv_2018T1,
+  ipv_ultimo      = ipv_ultimo,
+  trimestre_base  = trim_2018T1,
+  trimestre_ref   = trim_ultimo,
+  fuente          = "INE — Índice de Precios de la Vivienda, Comunitat Valenciana, General"
+)
+
+saveRDS(ipv_info, file = "../models/factor_ipv.rds")
+# También lo copiamos donde la app lo puede leer directamente
+saveRDS(ipv_info, file = "../shiny_app/models/factor_ipv.rds")
+
+message("✓ Factor IPV guardado: factor_ipv.rds (factor = ", round(factor_ipv_real, 4), ")")
+```
