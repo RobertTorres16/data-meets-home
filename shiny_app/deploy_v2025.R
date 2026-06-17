@@ -18,7 +18,7 @@ rsconnect::setAccountInfo(
 
 message("Desplegando versión estable 2025 a URL separada...")
 rsconnect::deployApp(
-  appDir   = 'shiny_app',
+  appDir   = '.', # Desplegar el directorio actual (shiny_app/)
   appName  = 'data-meets-home-2025',   # URL distinta: .../data-meets-home-2025/
   forceUpdate = TRUE
 )

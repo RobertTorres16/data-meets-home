@@ -19,11 +19,9 @@ rsconnect::setAccountInfo(
 )
 
 # 3. Desplegar la aplicación
-# Por defecto se desplegará el contenido de la carpeta 'shiny_app'
-# Puedes cambiar 'appName' si deseas que la URL final tenga otro nombre
 message("Iniciando el despliegue de la aplicación a shinyapps.io...")
 rsconnect::deployApp(
-  appDir = 'shiny_app',
+  appDir = '.', # Desplegar el directorio actual (shiny_app/)
   appName = 'data-meets-home', # URL: https://datameetshome.shinyapps.io/data-meets-home/
   forceUpdate = TRUE
 )

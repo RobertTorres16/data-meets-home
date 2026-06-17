@@ -11,16 +11,25 @@ Proyecto desarrollado en la asignatura **Proyecto II** del segundo curso del Gra
 ## Estructura del Proyecto
 
 ```
-├── notebooks/
+├── notebooks/                       # Notebooks de procesamiento y modelado
 │   ├── 01_api_scraping.ipynb        # Scraping de la API de Idealista (Python)
 │   ├── 02_distancia_metro.ipynb     # Cálculo de distancia al metro más cercano (Python)
-│   ├── 03_limpieza_2018.Rmd        # Limpieza del dataset 2018 (R)
-│   ├── 04_limpieza_2025.Rmd        # Limpieza del dataset 2025 (R)
-│   ├── 05_modelos.Rmd              # Entrenamiento y evaluación de modelos (R)
-│   └── 06_ajuste_ipv.Rmd           # Ajuste con el IPV para predicción 2025 (R)
+│   ├── 03_limpieza_2018.Rmd         # Limpieza del dataset 2018 (R)
+│   ├── 04_limpieza_2025.Rmd         # Limpieza del dataset 2025 (R)
+│   ├── 05_modelos.Rmd               # Entrenamiento y evaluación de modelos (R)
+│   └── 06_ajuste_ipv.Rmd            # Ajuste con el IPV para predicción 2025 (R)
 ├── data/                            # Datasets originales y auxiliares
 ├── models/                          # Modelos entrenados (.rds, no versionados)
 ├── docs/                            # Memoria del proyecto (PDF)
+├── shiny_app/                       # Aplicación interactiva de Shiny
+│   ├── app.R                        # Código del frontend/backend de Shiny
+│   ├── install_packages.R           # Script de instalación de dependencias en R
+│   ├── deploy.R                     # Script de despliegue a shinyapps.io (producción)
+│   ├── deploy_v2025.R               # Script de despliegue de versión estable 2025
+│   └── models/                      # Copia local de modelos ligeros para la app
+├── Desplegar App.bat                # Acceso directo para desplegar la app en Windows
+├── Lanzar App.bat                   # Acceso directo para ejecutar la app localmente
+├── requirements.txt                 # Dependencias de Python
 ├── .gitignore
 └── README.md
 ```

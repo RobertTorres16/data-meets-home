@@ -27,3 +27,7 @@ Archivos originales/
 
 # Carpeta antigua
 archive/
+
+# Carpeta de pruebas y scratch
+scratch/
+*.log
