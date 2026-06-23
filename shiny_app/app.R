@@ -1,9 +1,9 @@
 # ============================================================
 # Data Meets Home — Interactive Housing Price Explorer
-# Valencia, Spain · Idealista 2025
+# Valencia, Spain · Idealista 2018 → 2025
 # ============================================================
 # Proyecto II · Grado en Ciencia de Datos · UPV
-# Authors: Robert Torres, Joel Porcar, Maria Porta
+# Authors: Robert Torres, Jorge Acín, Mihai Mihalache, Rubén Tormo
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -483,6 +483,122 @@ ui <- navbarPage(
                 " · Muestra la dispersión, la mediana (línea central) y los outliers")
             ),
             div(class = "card-body", plotlyOutput("ch_box", height = "420px"))
+          )
+        )
+      ),
+      br()
+    )
+  ),
+
+  # ═══════════════════════════════════════════════════════════════
+  # TAB 4 — ACERCA DE
+  # ═══════════════════════════════════════════════════════════════
+  tabPanel("ℹ️ Acerca de",
+    fluidPage(
+      br(),
+      div(class = "hero",
+        tags$h2("Data Meets Home"),
+        tags$p(HTML(
+          "Aplicación interactiva de predicci&#243;n y an&#225;lisis del mercado inmobiliario en Valencia &middot; ",
+          "<strong>Proyecto II</strong> &middot; Grado en Ciencia de Datos &middot; UPV 2025"
+        ))
+      ),
+
+      fluidRow(
+        # ── Left column: Methodology ────────────────────────────
+        column(7,
+          div(class = "card mb-3",
+            div(class = "card-header", "🔬 Metodología"),
+            div(class = "card-body",
+              tags$ol(
+                tags$li(HTML("<strong>Datos</strong>: API oficial de Idealista (2018 y 2025, ~9.000 y ~8.000 propiedades respectivamente) + ubicaciones de metro/tranvía vía OpenStreetMap (Overpass API)")),
+                tags$li(HTML("<strong>Feature engineering</strong>: distancia al centro histórico, distancia a la estación más cercana, codificación de planta y estado")),
+                tags$li(HTML("<strong>Clustering</strong>: PCA + K-Means y Jerárquico para agrupar distritos por perfil de precios")),
+                tags$li(HTML("<strong>Modelos comparados</strong>: Regresión Lineal, <em>Random Forest</em> ✓, XGBoost, LightGBM")),
+                tags$li(HTML("<strong>Ajuste temporal IPV</strong>: las predicciones del modelo 2018 se escalan con el Índice de Precios de la Vivienda del INE (factor &times;", sprintf("%.4f", IPV_FACTOR), ") para reflejar el mercado de 2025"))
+              ),
+
+              tags$hr(),
+              tags$h6("Comparativa de modelos", style = "font-weight:700; color:#1E293B;"),
+              tags$table(
+                class = "table table-sm",
+                style = "font-size:.85rem;",
+                tags$thead(tags$tr(
+                  tags$th("Modelo"), tags$th("RMSE"), tags$th("MAE"), tags$th("R²")
+                )),
+                tags$tbody(
+                  tags$tr(tags$td("Regresión Lineal"),      tags$td("~110.000 €"), tags$td("~65.000 €"), tags$td("0.60")),
+                  tags$tr(style="background:rgba(79,70,229,.06);",
+                    tags$td(HTML("<strong>Random Forest ✓</strong>")),
+                    tags$td(HTML("<strong>~55.000 €</strong>")),
+                    tags$td(HTML("<strong>~37.000 €</strong>")),
+                    tags$td(HTML("<strong>0.79</strong>"))
+                  ),
+                  tags$tr(tags$td("XGBoost"),     tags$td("~58.000 €"), tags$td("~39.000 €"), tags$td("0.77")),
+                  tags$tr(tags$td("LightGBM"),    tags$td("~57.000 €"), tags$td("~38.000 €"), tags$td("0.77"))
+                )
+              )
+            )
+          ),
+
+          div(class = "card",
+            div(class = "card-header", "🔗 Recursos del proyecto"),
+            div(class = "card-body",
+              tags$ul(style = "list-style:none; padding:0; margin:0;",
+                tags$li(style = "padding:.4rem 0; border-bottom:1px solid #F1F5F9;",
+                  HTML("&#127760; <strong>App online:</strong> <a href='https://datameetshome.shinyapps.io/data-meets-home/' target='_blank' style='color:#4F46E5;'>datameetshome.shinyapps.io/data-meets-home</a>")
+                ),
+                tags$li(style = "padding:.4rem 0; border-bottom:1px solid #F1F5F9;",
+                  HTML("&#128193; <strong>Código fuente:</strong> <a href='https://github.com/RobertTorres16/data-meets-home' target='_blank' style='color:#4F46E5;'>github.com/RobertTorres16/data-meets-home</a>")
+                ),
+                tags$li(style = "padding:.4rem 0;",
+                  HTML("&#128240; <strong>Memoria:</strong> Disponible en el repositorio (<code>docs/Memoria - Data Meets Home.pdf</code>)")
+                )
+              )
+            )
+          )
+        ),
+
+        # ── Right column: Team + Tech ────────────────────────────
+        column(5,
+          div(class = "card mb-3",
+            div(class = "card-header", "👥 Equipo"),
+            div(class = "card-body",
+              div(style = "display:flex; flex-direction:column; gap:.75rem;",
+                lapply(list(
+                  list(name = "Robert Torres Mingarro",      role = "Limpieza de datos 2018 · Ajuste IPV",             icon = "🧹"),
+                  list(name = "Jorge Acín Zurita",           role = "Entrenamiento y selección de modelos",             icon = "🤖"),
+                  list(name = "Mihai Cristian Mihalache",    role = "Limpieza de datos 2025 · Análisis exploratorio",  icon = "📊"),
+                  list(name = "Rubén Tormo Piles",           role = "Scraping · Distancias al metro · Geoespacial",    icon = "🗺️")
+                ), function(m) {
+                  div(style = "display:flex; align-items:flex-start; gap:.6rem;",
+                    div(style = "font-size:1.3rem; margin-top:.1rem;", m$icon),
+                    div(
+                      div(style = "font-weight:600; color:#1E293B; font-size:.9rem;", m$name),
+                      div(style = "font-size:.78rem; color:#64748B;", m$role)
+                    )
+                  )
+                })
+              )
+            )
+          ),
+
+          div(class = "card",
+            div(class = "card-header", "⚙️ Tecnologías"),
+            div(class = "card-body",
+              tags$p(style = "font-size:.82rem; color:#475569; margin-bottom:.5rem;", tags$strong("R:")),
+              div(style = "display:flex; flex-wrap:wrap; gap:.35rem; margin-bottom:1rem;",
+                lapply(c("shiny","bslib","leaflet","plotly","dplyr","randomForest","ggplot2","caret","xgboost","lightgbm","sf","FactoMineR","rsconnect"), function(pkg) {
+                  tags$span(style = "background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; border-radius:6px; padding:.15rem .45rem; font-size:.75rem; font-weight:500;", pkg)
+                })
+              ),
+              tags$p(style = "font-size:.82rem; color:#475569; margin-bottom:.5rem;", tags$strong("Python:")),
+              div(style = "display:flex; flex-wrap:wrap; gap:.35rem;",
+                lapply(c("requests","pandas","numpy","openpyxl"), function(pkg) {
+                  tags$span(style = "background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; border-radius:6px; padding:.15rem .45rem; font-size:.75rem; font-weight:500;", pkg)
+                })
+              )
+            )
           )
         )
       ),
